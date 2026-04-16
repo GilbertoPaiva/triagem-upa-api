@@ -1,0 +1,49 @@
+name: Deploy Triagem API
+
+on:
+  push:
+    branches: [main]
+
+jobs:
+  build-and-push:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Login to GHCR
+        run: echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u ${{ github.actor }} --password-stdin
+
+      - name: Build & push image
+        run: |
+          IMAGE=ghcr.io/${{ github.repository }}/triagem-api:latest
+          docker build -t "$IMAGE" .
+          docker push "$IMAGE"
+
+  deploy:
+    needs: build-and-push
+    runs-on: ubuntu-latest
+    steps:
+      - name: SSH deploy to Droplet
+        uses: appleboy/ssh-action@v1
+        with:
+          host: ${{ secrets.DROPLET_HOST }}
+          username: ${{ secrets.DROPLET_USER }}
+          key: ${{ secrets.DROPLET_SSH_KEY }}
+          script: |
+            IMAGE=ghcr.io/${{ github.repository }}/triagem-api:latest
+            docker pull "$IMAGE"
+            docker stop triagem-api || true
+            docker rm triagem-api || true
+            docker run -d --name triagem-api \
+              --network app-network \
+              --restart unless-stopped \
+              -e DB_HOST=postgres \
+              -e DB_NAME=triagem \
+              -e DB_USER=${{ secrets.DB_USER }} \
+              -e DB_PASS=${{ secrets.DB_PASS }} \
+              -e CORS_ORIGINS=https://triagem.gilbertopaiva.me \
+              -p 8080:8080 \
+              "$IMAGE"
